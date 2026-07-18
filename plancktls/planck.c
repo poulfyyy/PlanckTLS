@@ -11,28 +11,23 @@
 #include <time.h>
 #include <pthread.h>
 #include <errno.h>
-
 #define WRITE16(p, v) do { (p)[0] = ((v) >> 8) & 0xff; (p)[1] = (v) & 0xff; } while(0)
 #define READ16(p) (((p)[0] << 8) | (p)[1])
 #define WRITE24(p, v) do { (p)[0] = ((v) >> 16) & 0xff; (p)[1] = ((v) >> 8) & 0xff; (p)[2] = (v) & 0xff; } while(0)
 #define READ24(p) (((p)[0] << 16) | ((p)[1] << 8) | (p)[2])
 #define WRITE32(p, v) do { (p)[0] = ((v) >> 24) & 0xff; (p)[1] = ((v) >> 16) & 0xff; (p)[2] = ((v) >> 8) & 0xff; (p)[3] = (v) & 0xff; } while(0)
 #define READ32(p) (((p)[0] << 24) | ((p)[1] << 16) | ((p)[2] << 8) | (p)[3])
-
 #ifndef PLANCK_DEBUG
 #define PLANCK_DEBUG 0
 #endif
-
 #if PLANCK_DEBUG
 #define LOG(fmt, ...) fprintf(stderr, fmt, ##__VA_ARGS__)
 #else
 #define LOG(fmt, ...) ((void)0)
 #endif
-
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
 #endif
-
 #define TLS_HS_CLIENT_HELLO          1
 #define TLS_HS_SERVER_HELLO          2
 #define TLS_HS_ENCRYPTED_EXTENSIONS  8
@@ -53,7 +48,6 @@
 #define TLS_EXT_PSK_KEY_EXCHANGE   45
 #define TLS_EXT_SIGNATURE_ALGOS    13
 #define TLS_EXT_ALPN               16
-
 #define MAX_BUF                    32768
 #define AES_GCM_KEY_SIZE           16
 #define AES_GCM_IV_SIZE            12
@@ -61,21 +55,16 @@
 #define CHACHA_KEY_SIZE            32
 #define CHACHA_IV_SIZE             12
 #define SHA256_SIZE                32
-
 static int planck_initialized = 0;
 static pthread_mutex_t planck_init_mutex = PTHREAD_MUTEX_INITIALIZER;
-
 typedef int64_t fe[5];
 #define LMASK 0x7ffffffffffffULL
 #define LBITS 51
-
 #ifdef __SIZEOF_INT128__
-
 static uint64_t load64(const uint8_t *p){
     return (uint64_t)p[0]|(uint64_t)p[1]<<8|(uint64_t)p[2]<<16|(uint64_t)p[3]<<24
           |(uint64_t)p[4]<<32|(uint64_t)p[5]<<40|(uint64_t)p[6]<<48|(uint64_t)p[7]<<56;
 }
-
 static void fexpand(fe o,const uint8_t *in){
     uint8_t buf[39];memcpy(buf,in,32);memset(buf+32,0,7);
     o[0]=(int64_t)(load64(buf+0)&LMASK);
@@ -84,7 +73,6 @@ static void fexpand(fe o,const uint8_t *in){
     o[3]=(int64_t)((load64(buf+19)>>1)&LMASK);
     o[4]=(int64_t)((load64(buf+25)>>4)&LMASK);
 }
-
 static void fcontract(uint8_t *out,fe h){
     int i; __int128 t;
     for(i=0;i<2;i++){
@@ -111,10 +99,8 @@ static void fcontract(uint8_t *out,fe h){
     out[25]|=a4<<4;out[26]=a4>>4;out[27]=a4>>12;out[28]=a4>>20;
     out[29]=a4>>28;out[30]=a4>>36;out[31]=a4>>44;
 }
-
 static void fsum(fe o,const fe a,const fe b){int i;for(i=0;i<5;i++)o[i]=a[i]+b[i];}
 static void fdifference(fe o,const fe a,const fe b){int i;for(i=0;i<5;i++)o[i]=a[i]-b[i];}
-
 static void fmul(fe o,const fe a,const fe b){
     __int128 r[9]={0};int i,j;
     for(i=0;i<5;i++)for(j=0;j<5;j++)r[i+j]+=(__int128)a[i]*b[j];
@@ -126,9 +112,7 @@ static void fmul(fe o,const fe a,const fe b){
     }
     for(i=0;i<5;i++)o[i]=(int64_t)r[i];
 }
-
 static void fsquare(fe o,const fe a){fmul(o,a,a);}
-
 static void fmul121666(fe o,const fe a){
     __int128 r[5];int i;
     for(i=0;i<5;i++)r[i]=(__int128)a[i]*121666;
@@ -140,7 +124,6 @@ static void fmul121666(fe o,const fe a){
     }
     for(i=0;i<5;i++)o[i]=(int64_t)r[i];
 }
-
 static void finvert(fe o,const fe a){
     fe t0,t1,t2,t3;int i;
     fmul(t0,a,a);         fsquare(t1,t0);
@@ -161,11 +144,9 @@ static void finvert(fe o,const fe a){
     for(i=1;i<5;i++)fsquare(t1,t1);
     fmul(o,t1,t0);
 }
-
 static void fselect(fe a,fe b,uint64_t swap){
     uint64_t m=-swap;int i;for(i=0;i<5;i++){uint64_t t=m&((uint64_t)a[i]^(uint64_t)b[i]);a[i]^=(int64_t)t;b[i]^=(int64_t)t;}
 }
-
 static void x25519_scalar_mult(uint8_t out[32],const uint8_t scalar[32],const uint8_t point[32]){
     fe x1,x2={1},z2={0},x3,z3={1},a,aa,b,bb,c,d,da,cb,e;
     uint8_t clamped[32];memcpy(clamped,scalar,32);clamped[0]&=248;clamped[31]&=127;clamped[31]|=64;
@@ -189,18 +170,14 @@ static void x25519_scalar_mult(uint8_t out[32],const uint8_t scalar[32],const ui
     fselect(x2,x3,swap);fselect(z2,z3,swap);
     finvert(a,z2);fmul(b,x2,a);fcontract(out,b);
 }
-
 static void x25519_keygen(uint8_t pub[32],const uint8_t priv[32]){
     uint8_t base[32]={9};x25519_scalar_mult(pub,priv,base);
 }
-
 #else
-
 static uint64_t load64(const uint8_t *p){
     return (uint64_t)p[0]|(uint64_t)p[1]<<8|(uint64_t)p[2]<<16|(uint64_t)p[3]<<24
           |(uint64_t)p[4]<<32|(uint64_t)p[5]<<40|(uint64_t)p[6]<<48|(uint64_t)p[7]<<56;
 }
-
 static void fexpand(fe o,const uint8_t *in){
     uint8_t buf[39];memcpy(buf,in,32);memset(buf+32,0,7);
     o[0]=(int64_t)(load64(buf+0)&LMASK);
@@ -209,7 +186,6 @@ static void fexpand(fe o,const uint8_t *in){
     o[3]=(int64_t)((load64(buf+19)>>1)&LMASK);
     o[4]=(int64_t)((load64(buf+25)>>4)&LMASK);
 }
-
 static inline uint64_t mul64_128(uint64_t a, uint64_t b, uint64_t *hi) {
     uint32_t a0 = (uint32_t)(a & 0xFFFFFFFF), a1 = (uint32_t)(a >> 32);
     uint32_t b0 = (uint32_t)(b & 0xFFFFFFFF), b1 = (uint32_t)(b >> 32);
@@ -221,7 +197,6 @@ static inline uint64_t mul64_128(uint64_t a, uint64_t b, uint64_t *hi) {
     *hi = p3 + (mid >> 32);
     return (mid << 32) | (p0 & 0xFFFFFFFF);
 }
-
 static void fcontract(uint8_t *out, fe h) {
     uint64_t carry;
     int i, j;
@@ -270,10 +245,8 @@ static void fcontract(uint8_t *out, fe h) {
     out[25]|=a4<<4;out[26]=a4>>4;out[27]=a4>>12;out[28]=a4>>20;
     out[29]=a4>>28;out[30]=a4>>36;out[31]=a4>>44;
 }
-
 static void fsum(fe o,const fe a,const fe b){int i;for(i=0;i<5;i++)o[i]=a[i]+b[i];}
 static void fdifference(fe o,const fe a,const fe b){int i;for(i=0;i<5;i++)o[i]=a[i]-b[i];}
-
 static void fmul(fe o,const fe a,const fe b){
     uint64_t lo[9], hi[9];
     for (int i = 0; i < 9; i++) { lo[i] = 0; hi[i] = 0; }
@@ -328,9 +301,7 @@ static void fmul(fe o,const fe a,const fe b){
         o[i] = (int64_t)(lo[i] & 0x7FFFFFFFFFFFULL);
     }
 }
-
 static void fsquare(fe o,const fe a){fmul(o,a,a);}
-
 static void fmul121666(fe o,const fe a){
     uint64_t lo[5], high[5];
     for (int i = 0; i < 5; i++) {
@@ -361,7 +332,6 @@ static void fmul121666(fe o,const fe a){
         o[i] = (int64_t)(lo[i] & 0x7FFFFFFFFFFFULL);
     }
 }
-
 static void finvert(fe o,const fe a){
     fe t0,t1,t2,t3;int i;
     fmul(t0,a,a);         fsquare(t1,t0);
@@ -382,11 +352,9 @@ static void finvert(fe o,const fe a){
     for(i=1;i<5;i++)fsquare(t1,t1);
     fmul(o,t1,t0);
 }
-
 static void fselect(fe a,fe b,uint64_t swap){
     uint64_t m=-swap;int i;for(i=0;i<5;i++){uint64_t t=m&((uint64_t)a[i]^(uint64_t)b[i]);a[i]^=(int64_t)t;b[i]^=(int64_t)t;}
 }
-
 static void x25519_scalar_mult(uint8_t out[32],const uint8_t scalar[32],const uint8_t point[32]){
     fe x1,x2={1},z2={0},x3,z3={1},a,aa,b,bb,c,d,da,cb,e;
     uint8_t clamped[32];memcpy(clamped,scalar,32);clamped[0]&=248;clamped[31]&=127;clamped[31]|=64;
@@ -410,13 +378,10 @@ static void x25519_scalar_mult(uint8_t out[32],const uint8_t scalar[32],const ui
     fselect(x2,x3,swap);fselect(z2,z3,swap);
     finvert(a,z2);fmul(b,x2,a);fcontract(out,b);
 }
-
 static void x25519_keygen(uint8_t pub[32],const uint8_t priv[32]){
     uint8_t base[32]={9};x25519_scalar_mult(pub,priv,base);
 }
-
 #endif
-
 static const uint32_t sha256_k[64]={
 0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
 0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
@@ -426,11 +391,8 @@ static const uint32_t sha256_k[64]={
 0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
 0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
 0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
-
 typedef struct{uint32_t s[8];uint64_t len;uint8_t b[64];int off;}sha256_ctx;
-
 static uint32_t sha256_rotr(uint32_t x,int n){return(x>>n)|(x<<(32-n));}
-
 static void sha256_transform(uint32_t s[8],const uint8_t b[64]){
     uint32_t w[64],a=s[0],B=s[1],C=s[2],D=s[3],e=s[4],f=s[5],g=s[6],h=s[7];int i;
     for(i=0;i<16;i++)w[i]=((uint32_t)b[i*4]<<24)|((uint32_t)b[i*4+1]<<16)|((uint32_t)b[i*4+2]<<8)|b[i*4+3];
@@ -448,13 +410,11 @@ static void sha256_transform(uint32_t s[8],const uint8_t b[64]){
     }
     s[0]+=a;s[1]+=B;s[2]+=C;s[3]+=D;s[4]+=e;s[5]+=f;s[6]+=g;s[7]+=h;
 }
-
 static void sha256_init(sha256_ctx*ctx){
     ctx->s[0]=0x6a09e667;ctx->s[1]=0xbb67ae85;ctx->s[2]=0x3c6ef372;ctx->s[3]=0xa54ff53a;
     ctx->s[4]=0x510e527f;ctx->s[5]=0x9b05688c;ctx->s[6]=0x1f83d9ab;ctx->s[7]=0x5be0cd19;
     ctx->len=0;ctx->off=0;
 }
-
 static void sha256_update(sha256_ctx*ctx,const uint8_t*d,size_t l){
     ctx->len+=l*8;
     while(l>0){
@@ -463,7 +423,6 @@ static void sha256_update(sha256_ctx*ctx,const uint8_t*d,size_t l){
         if(ctx->off==64){sha256_transform(ctx->s,ctx->b);ctx->off=0;}
     }
 }
-
 static void sha256_final(uint8_t out[32],sha256_ctx*ctx){
     uint64_t bl=ctx->len;
     uint8_t pad[64];int i;memset(pad,0,64);pad[0]=0x80;sha256_update(ctx,pad,1);
@@ -475,7 +434,6 @@ static void sha256_final(uint8_t out[32],sha256_ctx*ctx){
         out[i*4+2]=(ctx->s[i]>>8)&0xff;out[i*4+3]=ctx->s[i]&0xff;
     }
 }
-
 static void hmac_sha256(uint8_t out[32],const uint8_t*k,size_t kl,const uint8_t*d,size_t dl){
     uint8_t kb[64],ik[64],ok[64],ih[32];sha256_ctx ctx;int i;
     memset(kb,0,64);
@@ -485,11 +443,9 @@ static void hmac_sha256(uint8_t out[32],const uint8_t*k,size_t kl,const uint8_t*
     sha256_init(&ctx);sha256_update(&ctx,ik,64);sha256_update(&ctx,d,dl);sha256_final(ih,&ctx);
     sha256_init(&ctx);sha256_update(&ctx,ok,64);sha256_update(&ctx,ih,32);sha256_final(out,&ctx);
 }
-
 static void hkdf_extract(uint8_t prk[32],const uint8_t*salt,size_t sl,const uint8_t*ikm,size_t il){
     uint8_t z[32]={0};hmac_sha256(prk,salt?salt:z,salt?sl:32,ikm,il);
 }
-
 static void hkdf_expand_label(uint8_t *okm, size_t ol,
                               const uint8_t prk[32],
                               const char *label,
@@ -532,7 +488,6 @@ static void hkdf_expand_label(uint8_t *okm, size_t ol,
         counter++;
     }
 }
-
 static void tls12_prf_sha256(uint8_t *out, size_t olen,
                               const uint8_t *secret, size_t slen,
                               const char *label,
@@ -558,7 +513,6 @@ static void tls12_prf_sha256(uint8_t *out, size_t olen,
         off += n;
     }
 }
-
 static const uint8_t aes_sbox[256]={
 0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
 0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
@@ -576,18 +530,14 @@ static const uint8_t aes_sbox[256]={
 0x70,0x3e,0xb5,0x66,0x48,0x03,0xf6,0x0e,0x61,0x35,0x57,0xb9,0x86,0xc1,0x1d,0x9e,
 0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,
 0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16};
-
 static const uint32_t aes_rcon[10]={
 0x01000000,0x02000000,0x04000000,0x08000000,0x10000000,
 0x20000000,0x40000000,0x80000000,0x1b000000,0x36000000};
-
 static uint32_t aes_subw(uint32_t w){
     return(aes_sbox[w>>24]<<24)|(aes_sbox[(w>>16)&0xff]<<16)|
           (aes_sbox[(w>>8)&0xff]<<8)|aes_sbox[w&0xff];
 }
-
 static uint32_t aes_rotw(uint32_t w){return(w<<8)|(w>>24);}
-
 static void aes_key_expand(uint32_t w[44],const uint8_t k[16]){
     int i;for(i=0;i<4;i++)w[i]=(k[i*4]<<24)|(k[i*4+1]<<16)|(k[i*4+2]<<8)|k[i*4+3];
     for(i=4;i<44;i++){
@@ -596,9 +546,7 @@ static void aes_key_expand(uint32_t w[44],const uint8_t k[16]){
         w[i]=w[i-4]^t;
     }
 }
-
 #define AES_XTIME(x) (((x<<1)^(((x>>7)&1)*0x1b))&0xff)
-
 static void aes_encrypt_block(uint8_t out[16],const uint8_t in[16],const uint32_t w[44]){
     uint8_t s[16];int i,r;memcpy(s,in,16);
     for(i=0;i<4;i++){
@@ -625,7 +573,6 @@ static void aes_encrypt_block(uint8_t out[16],const uint8_t in[16],const uint32_
     }
     memcpy(out,s,16);
 }
-
 static void gcm_mul(uint8_t *a, const uint8_t *b) {
     uint8_t z[16] = {0}, v[16];
     memcpy(v, b, 16);
@@ -640,7 +587,6 @@ static void gcm_mul(uint8_t *a, const uint8_t *b) {
     }
     memcpy(a, z, 16);
 }
-
 static void gcm_ghash(uint8_t *y, const uint8_t *h, const uint8_t *data, size_t len) {
     for (size_t i = 0; i < len; i += 16) {
         size_t n = (len - i < 16) ? (len - i) : 16;
@@ -648,7 +594,6 @@ static void gcm_ghash(uint8_t *y, const uint8_t *h, const uint8_t *data, size_t 
         gcm_mul(y, h);
     }
 }
-
 static void gcm_ctr(uint8_t *out, const uint8_t *in, size_t len, const uint32_t w[44], const uint8_t j0[16]) {
     uint8_t ctr[16], mask[16];
     memcpy(ctr, j0, 16);
@@ -660,7 +605,6 @@ static void gcm_ctr(uint8_t *out, const uint8_t *in, size_t len, const uint32_t 
         for (int i = 15; i >= 12; i--) if (++ctr[i]) break;
     }
 }
-
 static int aes_gcm_crypt(uint8_t *out, uint8_t *tag,
                          const uint8_t *in, size_t len,
                          const uint8_t key[16], const uint8_t iv[12],
@@ -686,21 +630,17 @@ static int aes_gcm_crypt(uint8_t *out, uint8_t *tag,
     }
     return (int)len;
 }
-
 static void aes_gcm_encrypt(uint8_t *ct, uint8_t tag[16], const uint8_t *pt, size_t len,
                             const uint8_t key[16], const uint8_t iv[12],
                             const uint8_t *aad, size_t alen) {
     aes_gcm_crypt(ct, tag, pt, len, key, iv, aad, alen, 0);
 }
-
 static int aes_gcm_decrypt(uint8_t *pt, const uint8_t *ct, size_t len,
                            const uint8_t key[16], const uint8_t iv[12],
                            const uint8_t tag[16], const uint8_t *aad, size_t alen) {
     return aes_gcm_crypt(pt, (uint8_t *)tag, ct, len, key, iv, aad, alen, 1);
 }
-
 static uint32_t chacha_rotl(uint32_t x,int n){return(x<<n)|(x>>(32-n));}
-
 static void chacha20_block(uint8_t out[64],const uint32_t key[8],uint32_t ctr,const uint32_t nonce[3]){
     uint32_t x[16];int i;
     x[0]=0x61707865;x[1]=0x3320646e;x[2]=0x79622d32;x[3]=0x6b206574;
@@ -726,7 +666,6 @@ static void chacha20_block(uint8_t out[64],const uint32_t key[8],uint32_t ctr,co
     }
     for(i=0;i<16;i++){uint32_t s=x[i]+v[i];out[i*4]=s;out[i*4+1]=s>>8;out[i*4+2]=s>>16;out[i*4+3]=s>>24;}
 }
-
 static void poly1305_mac(uint8_t out[16],const uint8_t*msg,size_t len,const uint8_t key[32]){
     uint32_t r[4],h[5]={0};int i;for(i=0;i<4;i++)
         r[i]=((uint32_t)key[i*4]|((uint32_t)key[i*4+1]<<8)|((uint32_t)key[i*4+2]<<16)|((uint32_t)key[i*4+3]<<24))&0x3ffffff;
@@ -751,7 +690,6 @@ static void poly1305_mac(uint8_t out[16],const uint8_t*msg,size_t len,const uint
         out[i*4-1]=acc&0xff;acc>>=8;out[i*4]=acc&0xff;acc>>=8;out[i*4+1]=acc&0xff;acc>>=8;out[i*4+2]=acc&0xff;acc>>=8;
     }
 }
-
 static void chacha_poly_encrypt(uint8_t*ct,uint8_t tag[16],const uint8_t*pt,size_t len,
                                  const uint8_t key[32],const uint8_t nonce[12],
                                  const uint8_t*aad,size_t alen){
@@ -776,7 +714,6 @@ static void chacha_poly_encrypt(uint8_t*ct,uint8_t tag[16],const uint8_t*pt,size
     ml += 8;
     poly1305_mac(tag, mac_in, ml, poly_key);
 }
-
 static int chacha_poly_decrypt(uint8_t*pt,const uint8_t*ct,size_t len,
                                 const uint8_t key[32],const uint8_t nonce[12],
                                 const uint8_t tag[16],
@@ -784,7 +721,6 @@ static int chacha_poly_decrypt(uint8_t*pt,const uint8_t*ct,size_t len,
     uint8_t calc[16];chacha_poly_encrypt(pt,calc,ct,len,key,nonce,aad,alen);
     int i;for(i=0;i<16;i++)if(calc[i]!=tag[i])return-1;return(int)len;
 }
-
 static int full_write(int fd, const void *buf, size_t n) {
     const uint8_t *p = buf;
     while (n) { 
@@ -802,7 +738,6 @@ static int full_write(int fd, const void *buf, size_t n) {
     }
     return 0;
 }
-
 static int recv_all(int fd, uint8_t *buf, size_t n) {
     size_t off = 0;
     while (off < n) { 
@@ -823,25 +758,9 @@ static int recv_all(int fd, uint8_t *buf, size_t n) {
     }
     return 0;
 }
-
-struct planck_conn {
-    int fd;
-    int tls_version;
-    int http_version;
-    int cipher;
-    uint8_t ck[32], sk[32], civ[12], siv[12];
-    uint64_t cs, ss;
-    uint8_t tx[MAX_BUF];
-    uint8_t hs_sk[32], hs_siv[12];
-    uint64_t hs_ss;
-    uint8_t h2_buf[MAX_BUF];
-    int h2_buf_len;
-};
-
 static int tls_encrypt(planck_conn *c, const uint8_t *pt, int ptlen, uint8_t *out, uint8_t record_type, uint8_t vh, uint8_t vl);
 static int tls_decrypt_app(planck_conn *c, const uint8_t *ct, int ctlen, uint8_t *pt, uint8_t record_type, uint8_t vh, uint8_t vl, uint8_t *out_inner_ct);
 static int tls_decrypt_any(planck_conn *c, const uint8_t *ct, int ctlen, uint8_t *pt, uint8_t vh, uint8_t vl, int *used_handshake_keys, uint8_t *out_inner_ct);
-
 static uint8_t *build_client_hello(uint8_t *ch, const char *sni, const uint8_t client_random[32],
                                    const uint8_t *pub, const planck_config *cfg,
                                    uint16_t *ciphers, int num_ciphers,
@@ -879,7 +798,6 @@ static uint8_t *build_client_hello(uint8_t *ch, const char *sni, const uint8_t c
     }
     *p++ = 0x00; *p++ = 0x0d; *p++ = 0x00; *p++ = 0x08; *p++ = 0x00; *p++ = 0x06;
     *p++ = 0x04; *p++ = 0x03; *p++ = 0x08; *p++ = 0x04; *p++ = 0x08; *p++ = 0x05;
-    
     int http_version = cfg ? cfg->http_version : PLANCK_HTTP_1;
     *p++ = 0x00; *p++ = 0x10; uint8_t *al_ptr = p; p += 2;
     uint8_t *pl_ptr = p; p += 2;
@@ -891,13 +809,11 @@ static uint8_t *build_client_hello(uint8_t *ch, const char *sni, const uint8_t c
     }
     WRITE16(pl_ptr, p - pl_ptr - 2);
     WRITE16(al_ptr, p - al_ptr - 2);
-    
     WRITE16(el_ptr, p - el_ptr - 2);
     WRITE24(hl, (uint32_t)(p - hl - 3));
     WRITE16(rl_ptr, (uint16_t)(p - ch - 5));
     return p;
 }
-
 __attribute__((force_align_arg_pointer))
 static int tls13_handshake(planck_conn *c, const char *sni, const planck_config *cfg) {
     uint8_t ch[2048], *p, client_random[32], priv[32], pub[32];
@@ -1110,7 +1026,6 @@ static int tls13_handshake(planck_conn *c, const char *sni, const planck_config 
     LOG("[TLS13] handshake complete\n");
     return 0;
 }
-
 __attribute__((force_align_arg_pointer))
 static int tls12_handshake(planck_conn *c, const char *sni, const planck_config *cfg) {
     uint8_t ch[2048], *p, client_random[32], priv[32], pub[32];
@@ -1255,7 +1170,6 @@ static int tls12_handshake(planck_conn *c, const char *sni, const planck_config 
     c->http_version = h2_negotiated ? 2 : 1; 
     return 0;
 }
-
 static int tls_encrypt(planck_conn *c, const uint8_t *pt, int ptlen, uint8_t *out, uint8_t record_type, uint8_t vh, uint8_t vl) {
     if (c->tls_version == 13) {
         uint8_t nonce[12], tag[16]; memcpy(nonce, c->civ, 12);
@@ -1296,7 +1210,6 @@ static int tls_encrypt(planck_conn *c, const uint8_t *pt, int ptlen, uint8_t *ou
         }
     }
 }
-
 static int tls_decrypt_app(planck_conn *c, const uint8_t *ct, int ctlen, uint8_t *pt, uint8_t record_type, uint8_t vh, uint8_t vl, uint8_t *out_inner_ct) {
     if (c->tls_version == 13) {
         uint8_t nonce[12]; memcpy(nonce, c->siv, 12);
@@ -1349,7 +1262,6 @@ static int tls_decrypt_app(planck_conn *c, const uint8_t *ct, int ctlen, uint8_t
         }
     }
 }
-
 static int tls_decrypt_hs(planck_conn *c, const uint8_t *ct, int ctlen, uint8_t *pt, uint8_t vh, uint8_t vl) {
     uint8_t nonce[12]; memcpy(nonce, c->hs_siv, 12);
     for (int i = 4; i < 12; i++) nonce[i] ^= (c->hs_ss >> (8 * (11 - i))) & 0xff;
@@ -1361,7 +1273,6 @@ static int tls_decrypt_hs(planck_conn *c, const uint8_t *ct, int ctlen, uint8_t 
     if (dec >= 0) c->hs_ss++;   
     return dec;
 }
-
 static int tls_decrypt_any(planck_conn *c, const uint8_t *ct, int ctlen, uint8_t *pt,
                            uint8_t vh, uint8_t vl, int *used_handshake_keys, uint8_t *out_inner_ct) {
     int dec = tls_decrypt_app(c, ct, ctlen, pt, 0x17, vh, vl, out_inner_ct);
@@ -1388,7 +1299,6 @@ static int tls_decrypt_any(planck_conn *c, const uint8_t *ct, int ctlen, uint8_t
     }
     return dec;
 }
-
 static int h2_decode_int(const uint8_t *data, size_t len, size_t *offset, int prefix_bits, uint32_t *value) {
     if (*offset >= len) return -1;
     uint32_t v = data[*offset] & ((1 << prefix_bits) - 1);
@@ -1410,7 +1320,6 @@ static int h2_decode_int(const uint8_t *data, size_t len, size_t *offset, int pr
     }
     return -1;
 }
-
 static int h2_parse_headers(const uint8_t *data, size_t len, int *status_code) {
     *status_code = 0;
     size_t i = 0;
@@ -1432,7 +1341,7 @@ static int h2_parse_headers(const uint8_t *data, size_t len, int *status_code) {
             if (h2_decode_int(data, len, &i, 6, &idx_or_nlen) != 0) break;
             if (idx_or_nlen == 0) {
                 uint32_t nlen;
-                if (h2_decode_int(data, len, &i, 4, &nlen) != 0) break;
+                if (h2_decode_int(data, len, &i, 6, &nlen) != 0) break;
                 int is_status = (nlen == 7 && i + 7 <= len && memcmp(data + i, ":status", 7) == 0);
                 i += nlen;
                 uint32_t vlen;
@@ -1453,7 +1362,7 @@ static int h2_parse_headers(const uint8_t *data, size_t len, int *status_code) {
         } else if ((b & 0xF0) == 0x00) {
             i++;
             uint32_t nlen;
-            if (h2_decode_int(data, len, &i, 4, &nlen) != 0) break;
+            if (h2_decode_int(data, len, &i, 6, &nlen) != 0) break;
             int is_status = (nlen == 7 && i + 7 <= len && memcmp(data + i, ":status", 7) == 0);
             i += nlen;
             uint32_t vlen;
@@ -1499,11 +1408,9 @@ static int h2_parse_headers(const uint8_t *data, size_t len, int *status_code) {
     }
     return 0;
 }
-
 static uint8_t *h2_hpack_str(uint8_t *p, const char *s, size_t len) {
     *p++ = len & 0x7f; memcpy(p, s, len); return p + len;
 }
-
 static int h2_static_idx(const char *name, size_t len) {
     static const char *table[] = {
         ":authority", ":method", ":path", ":scheme", "accept", "accept-encoding",
@@ -1518,7 +1425,6 @@ static int h2_static_idx(const char *name, size_t len) {
     }
     return 0;
 }
-
 static int h2_build_headers(uint8_t *out, const char *method, const char *path,
                             const char **hdrs, int nhdrs) {
     uint8_t *p = out;
@@ -1552,6 +1458,10 @@ static int h2_build_headers(uint8_t *out, const char *method, const char *path,
         const char *val = colon + 1; while (*val == ' ') val++;
         size_t nl = colon - hdrs[i], vl = strlen(val);
         int idx = h2_static_idx(hdrs[i], nl);
+        if (nl == 10 && strncasecmp(hdrs[i], "connection", 10) == 0) continue;
+        if (nl == 10 && strncasecmp(hdrs[i], "keep-alive", 10) == 0) continue;
+        if (nl == 17 && strncasecmp(hdrs[i], "transfer-encoding", 17) == 0) continue;
+        if (nl == 7  && strncasecmp(hdrs[i], "upgrade", 7) == 0) continue;
         if (idx && idx != 1) {
             *p++ = 0x40 | idx; p = h2_hpack_str(p, val, vl);
         } else {
@@ -1561,23 +1471,32 @@ static int h2_build_headers(uint8_t *out, const char *method, const char *path,
     }
     return p - out;
 }
-
 static int h2_send_request(planck_conn *c, const char *method, const char *path,
                            const char **hdrs, int nhdrs) {
     uint8_t frame[MAX_BUF], *p = frame;
     int hdr_len = h2_build_headers(p + 9, method, path, hdrs, nhdrs);
-    frame[0] = (hdr_len >> 16) & 0xff; frame[1] = (hdr_len >> 8) & 0xff; frame[2] = hdr_len & 0xff;
-    frame[3] = 0x01; 
-    frame[4] = 0x05; 
-    frame[5] = 0; frame[6] = 0; frame[7] = 0; frame[8] = 1; 
-    uint8_t ct[MAX_BUF + 32]; 
+    if (hdr_len < 0 || hdr_len > MAX_BUF - 9) {
+        LOG("[HTTP2] headers too large (%d bytes, max %d)\n", hdr_len, MAX_BUF - 9);
+        return -1;
+    }
+    frame[0] = (hdr_len >> 16) & 0xff;
+    frame[1] = (hdr_len >> 8) & 0xff;
+    frame[2] = hdr_len & 0xff;
+    frame[3] = 0x01;
+    frame[4] = 0x05;
+    uint32_t sid = c->next_stream_id;
+    frame[5] = (sid >> 24) & 0x7F;  
+    frame[6] = (sid >> 16) & 0xFF;  
+    frame[7] = (sid >> 8)  & 0xFF;
+    frame[8] =  sid        & 0xFF;
+    c->next_stream_id += 2;
+    uint8_t ct[MAX_BUF + 32];
     int ctlen = tls_encrypt(c, frame, 9 + hdr_len, ct, TLS_CONTENT_APP_DATA, 0x03, 0x03);
     uint8_t rec[5] = { TLS_CONTENT_APP_DATA, 0x03, 0x03 };
     WRITE16(rec + 3, ctlen);
     if (full_write(c->fd, rec, 5) || full_write(c->fd, ct, ctlen)) return -1;
     return 0;
 }
-
 void planck_init(void) {
     pthread_mutex_lock(&planck_init_mutex);
     if (!planck_initialized) {
@@ -1586,7 +1505,6 @@ void planck_init(void) {
     }
     pthread_mutex_unlock(&planck_init_mutex);
 }
-
 static int tcp_connect(const char *host, int port) {
     struct addrinfo hints = { .ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM }, *res;
     char ps[8]; snprintf(ps, sizeof(ps), "%d", port);
@@ -1598,13 +1516,11 @@ static int tcp_connect(const char *host, int port) {
     for (struct addrinfo *rp = res; rp; rp = rp->ai_next) {
         fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
         if (fd < 0) continue;
-        
         struct timeval tv;
         tv.tv_sec = 10;
         tv.tv_usec = 0;
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-        
         if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0) break;
         LOG("[TCP] connect failed, trying next\n");
         close(fd); fd = -1;
@@ -1618,30 +1534,24 @@ static int tcp_connect(const char *host, int port) {
     }
     return fd;
 }
-
 __attribute__((force_align_arg_pointer))
 planck_conn *planck_connect(const char *host, int port, const planck_config *cfg) {
     planck_init();
-
     if (!host || !cfg) {
         return NULL;
     }
-
     int fd = tcp_connect(host, port);
     if (fd < 0) {
         return NULL;
     }
-
     planck_conn *c = calloc(1, sizeof(*c));
     if (!c) {
         close(fd);
         return NULL;
     }
     c->fd = fd;
-
     int tls_ver = cfg->tls_version;
     int hs_res = -1;
-
     if (tls_ver == PLANCK_TLS_13) {
         hs_res = tls13_handshake(c, host, cfg);
     } else if (tls_ver == PLANCK_TLS_12) {
@@ -1651,14 +1561,13 @@ planck_conn *planck_connect(const char *host, int port, const planck_config *cfg
         free(c);
         return NULL;
     }
-
     if (hs_res != 0) {
         LOG("[TLS] Handshake failed\n");
         close(fd);
         free(c);
         return NULL;
     }
-
+    c->next_stream_id = 1;
     if (c->http_version == PLANCK_HTTP_2) {
         const char *preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
         uint8_t settings[9] = {0, 0, 0, 4, 0, 0, 0, 0, 0};
@@ -1666,22 +1575,18 @@ planck_conn *planck_connect(const char *host, int port, const planck_config *cfg
         uint8_t plain_buf[MAX_BUF];
         memcpy(plain_buf, preface, strlen(preface));
         memcpy(plain_buf + strlen(preface), settings, sizeof(settings));
-
         uint8_t ct_buf[MAX_BUF + 32];
         int ctlen = tls_encrypt(c, plain_buf, plain_len, ct_buf, TLS_CONTENT_APP_DATA, 0x03, 0x03);
         uint8_t rec[5] = { TLS_CONTENT_APP_DATA, 0x03, 0x03 };
         WRITE16(rec + 3, ctlen);
-
         if (full_write(c->fd, rec, 5) || full_write(c->fd, ct_buf, ctlen)) {
             LOG("[HTTP2] failed to send preface\n");
             close(fd);
             free(c);
             return NULL;
         }
-
         uint8_t got_server_settings = 0;
         uint8_t sent_ack = 0;
-
         while (!got_server_settings || !sent_ack) {
             uint8_t hdr[5];
             if (recv_all(c->fd, hdr, 5) != 0) {
@@ -1704,25 +1609,21 @@ planck_conn *planck_connect(const char *host, int port, const planck_config *cfg
                 free(c);
                 return NULL;
             }
-
             uint8_t plain[MAX_BUF];
             int ptlen;
             int used_handshake_keys = 0;
             uint8_t inner_ct = 0;
-
             if (c->tls_version == 13) {
                 ptlen = tls_decrypt_any(c, buf, rlen, plain, hdr[1], hdr[2], &used_handshake_keys, &inner_ct);
             } else {
                 ptlen = tls_decrypt_app(c, buf, rlen, plain, hdr[0], hdr[1], hdr[2], NULL);
             }
-
             if (ptlen < 0) {
                 LOG("[HTTP2] decrypt failed during preface\n");
                 close(fd);
                 free(c);
                 return NULL;
             }
-
             if (c->tls_version == 13) {
                 if (inner_ct == TLS_CONTENT_HANDSHAKE && ptlen >= 4) {
                     uint8_t msgtype = plain[0];
@@ -1742,9 +1643,7 @@ planck_conn *planck_connect(const char *host, int port, const planck_config *cfg
                     return NULL;
                 }
             }
-
             if (ptlen < 1) continue;
-
             const uint8_t *p = plain, *end = plain + ptlen;
             while (p + 9 <= end) {
                 uint32_t flen = READ24(p);
@@ -1752,10 +1651,8 @@ planck_conn *planck_connect(const char *host, int port, const planck_config *cfg
                 uint8_t  flags = p[4];
                 const uint8_t *fdata = p + 9;
                 if (fdata + flen > end) break;
-
                 if (type == 0x04) { 
                     if (flags & 0x01) {
-                        // ACK
                     } else {
                         got_server_settings = 1;
                         if (!sent_ack) {
@@ -1782,10 +1679,28 @@ planck_conn *planck_connect(const char *host, int port, const planck_config *cfg
             }
         }
     }
-
     return c;
 }
-
+static int h2_send_window_update(planck_conn *c, uint32_t stream_id, uint32_t increment) {
+    uint8_t frame[13];
+    frame[0] = 0; frame[1] = 0; frame[2] = 4;  
+    frame[3] = 0x08;  
+    frame[4] = 0x00;  
+    frame[5] = (stream_id >> 24) & 0x7F;
+    frame[6] = (stream_id >> 16) & 0xFF;
+    frame[7] = (stream_id >> 8) & 0xFF;
+    frame[8] = stream_id & 0xFF;
+    frame[9] = (increment >> 24) & 0x7F;
+    frame[10] = (increment >> 16) & 0xFF;
+    frame[11] = (increment >> 8) & 0xFF;
+    frame[12] = increment & 0xFF;
+    uint8_t ct[MAX_BUF + 32];
+    int ctlen = tls_encrypt(c, frame, 13, ct, TLS_CONTENT_APP_DATA, 0x03, 0x03);
+    uint8_t rec[5] = { TLS_CONTENT_APP_DATA, 0x03, 0x03 };
+    WRITE16(rec + 3, ctlen);
+    if (full_write(c->fd, rec, 5) || full_write(c->fd, ct, ctlen)) return -1;
+    return 0;
+}
 int planck_request(planck_conn *c, const char *method, const char *path,
                    const char **hdrs, int nhdrs,
                    const uint8_t *body, int bodylen,
@@ -1795,12 +1710,83 @@ int planck_request(planck_conn *c, const char *method, const char *path,
             LOG("[HTTP2] failed to send request\n");
             return -1;
         }
+        h2_send_window_update(c, 0, MAX_BUF);
         int total_body = 0;
         int stream_closed = 0;
         int status_code = 0;
         c->h2_buf_len = 0;
-
-        while (!stream_closed && total_body < rmax) {
+        int max_iterations = 10000;
+        int iterations = 0;
+        while (!stream_closed && total_body < rmax && iterations < max_iterations) {
+            iterations++;
+            int processed_any = 0;
+            int p = 0;
+            while (p + 9 <= c->h2_buf_len) {
+                uint32_t flen = READ24(c->h2_buf + p);
+                uint8_t type = c->h2_buf[p + 3];
+                uint8_t flags = c->h2_buf[p + 4];
+                if (p + 9 + flen > c->h2_buf_len) {
+                    break; 
+                }
+                processed_any = 1;
+                if (type == 0x00) {  
+                    int copy_len = flen;
+                    if (total_body + copy_len > rmax) copy_len = rmax - total_body;
+                    if (copy_len > 0) {
+                        memcpy(rbuf + total_body, c->h2_buf + p + 9, copy_len);
+                        total_body += copy_len;
+                    }
+                    if (copy_len > 0) {
+                        h2_send_window_update(c, 1, copy_len);
+                        h2_send_window_update(c, 0, copy_len);
+                    }
+                    if (flags & 0x01) stream_closed = 1;
+                } else if (type == 0x01) {  
+                    size_t payload_offset = 0;
+                    if (flags & 0x08) {
+                        if (flen > 0) {
+                            uint8_t pad_length = c->h2_buf[p + 9];
+                            payload_offset = 1 + pad_length;
+                        }
+                    }
+                    if (flags & 0x20) {
+                        payload_offset += 5;
+                    }
+                    if (flen > payload_offset) {
+                        h2_parse_headers(c->h2_buf + p + 9 + payload_offset,
+                                       flen - payload_offset, &status_code);
+                    }
+                    if (flags & 0x01) stream_closed = 1;
+                } else if (type == 0x03) {  
+                    LOG("[HTTP2] RST_STREAM received, stream reset by server\n");
+                    stream_closed = 1;
+                } else if (type == 0x02) {  
+                } else if (type == 0x07) {  
+                    LOG("[HTTP2] GOAWAY received\n");
+                    return -1;
+                } else if (type == 0x08) {  
+                } else if (type == 0x04) {  
+                    if (flags & 0x01) {
+                    } else {
+                        uint8_t ack[] = {0, 0, 0, 0x04, 0x01, 0, 0, 0, 0};
+                        uint8_t ct_ack[MAX_BUF];
+                        int ack_ctlen = tls_encrypt(c, ack, sizeof(ack), ct_ack,
+                                                    TLS_CONTENT_APP_DATA, 0x03, 0x03);
+                        uint8_t ack_rec[5] = { TLS_CONTENT_APP_DATA, 0x03, 0x03 };
+                        WRITE16(ack_rec + 3, ack_ctlen);
+                        full_write(c->fd, ack_rec, 5);
+                        full_write(c->fd, ct_ack, ack_ctlen);
+                    }
+                } else {
+                    LOG("[HTTP2] unknown frame type: %02x\n", type);
+                }
+                p += 9 + flen;
+            }
+            if (p > 0) {
+                memmove(c->h2_buf, c->h2_buf + p, c->h2_buf_len - p);
+                c->h2_buf_len -= p;
+            }
+            if (stream_closed) break;
             uint8_t rh[5];
             if (recv_all(c->fd, rh, 5)) {
                 LOG("[HTTP2] recv frame header failed\n");
@@ -1823,93 +1809,99 @@ int planck_request(planck_conn *c, const char *method, const char *path,
                 LOG("[HTTP2] decrypt failed\n");
                 return -1;
             }
-
+            if (c->tls_version == 13 && inner_ct == TLS_CONTENT_HANDSHAKE) {
+                LOG("[HTTP2] skipping TLS 1.3 handshake message\n");
+                continue;
+            }
             if (c->h2_buf_len + ptlen > MAX_BUF) {
                 LOG("[HTTP2] h2 buffer overflow\n");
                 return -1;
             }
             memcpy(c->h2_buf + c->h2_buf_len, plain, ptlen);
             c->h2_buf_len += ptlen;
-
-            int p = 0;
-            while (p + 9 <= c->h2_buf_len) {
-                uint32_t flen = READ24(c->h2_buf + p);
-                uint8_t type = c->h2_buf[p + 3];
-                uint8_t flags = c->h2_buf[p + 4];
-                
-                if (p + 9 + flen > c->h2_buf_len) {
-                    break;
-                }
-                
-                if (type == 0x00) {
-                    int copy_len = flen;
-                    if (total_body + copy_len > rmax) copy_len = rmax - total_body;
-                    if (copy_len > 0) {
-                        memcpy(rbuf + total_body, c->h2_buf + p + 9, copy_len);
-                        total_body += copy_len;
-                    }
-                    if (flags & 0x01) stream_closed = 1; 
-                } else if (type == 0x01) {
-                    h2_parse_headers(c->h2_buf + p + 9, flen, &status_code);
-                    if (flags & 0x01) stream_closed = 1; 
-                } else if (type == 0x03) {
-                    // PRIORITY
-                } else if (type == 0x07) {
-                    LOG("[HTTP2] GOAWAY received\n");
-                    return -1;
-                } else if (type == 0x08) {
-                    // WINDOW_UPDATE
-                } else if (type == 0x04) {
-                    // SETTINGS
-                } else {
-                    LOG("[HTTP2] unknown frame type: %02x\n", type);
-                }
-                p += 9 + flen;
-            }
-            
-            if (p > 0) {
-                memmove(c->h2_buf, c->h2_buf + p, c->h2_buf_len - p);
-                c->h2_buf_len -= p;
-            }
+        }
+        if (iterations >= max_iterations) {
+            LOG("[HTTP2] max iterations reached, possible infinite loop\n");
+            return -1;
         }
         LOG("[HTTP2] request complete, status: %d, body: %d bytes\n", status_code, total_body);
         return total_body;
     } else {
         char *req = (char*)c->tx;
-        int off = snprintf(req, MAX_BUF, "%s %s HTTP/1.1\r\n", method, path);
-        for (int i = 0; i < nhdrs; i++) off += snprintf(req + off, MAX_BUF - off, "%s\r\n", hdrs[i]);
-        if (body && bodylen > 0) off += snprintf(req + off, MAX_BUF - off, "Content-Length: %d\r\n", bodylen);
+        int off = 0;
+        off += snprintf(req + off, MAX_BUF - off, "%s %s HTTP/1.1\r\n", method, path);
+        for (int i = 0; i < nhdrs; i++) {
+            off += snprintf(req + off, MAX_BUF - off, "%s\r\n", hdrs[i]);
+        }
+        if (body && bodylen > 0) {
+            off += snprintf(req + off, MAX_BUF - off, "Content-Length: %d\r\n", bodylen);
+        }
         off += snprintf(req + off, MAX_BUF - off, "\r\n");
-        if (body && bodylen > 0) { memcpy(req + off, body, bodylen); off += bodylen; }
-        uint8_t ct[MAX_BUF + 32]; 
+        if (body && bodylen > 0) {
+            if (off + bodylen > MAX_BUF) {
+                LOG("[HTTP1.1] request too large\n");
+                return -1;
+            }
+            memcpy(req + off, body, bodylen);
+            off += bodylen;
+        }
+        uint8_t ct[MAX_BUF + 32];
         int ctlen = tls_encrypt(c, (uint8_t*)req, off, ct, TLS_CONTENT_APP_DATA, 0x03, 0x03);
+        if (ctlen < 0) {
+            LOG("[HTTP1.1] tls_encrypt failed\n");
+            return -1;
+        }
         uint8_t rec[5] = { TLS_CONTENT_APP_DATA, 0x03, 0x03 };
         WRITE16(rec + 3, ctlen);
         if (full_write(c->fd, rec, 5) || full_write(c->fd, ct, ctlen)) {
             LOG("[HTTP1.1] send request failed\n");
             return -1;
         }
-        uint8_t rh[5]; 
-        if (recv_all(c->fd, rh, 5)) {
-            LOG("[HTTP1.1] recv response header failed\n");
+        int total_read = 0;
+        int max_loops = 100;
+        for (int loop = 0; loop < max_loops; loop++) {
+            uint8_t rh[5];
+            if (recv_all(c->fd, rh, 5)) {
+                LOG("[HTTP1.1] recv response header failed\n");
+                return -1;
+            }
+            uint16_t rrl = READ16(rh + 3);
+            if (rrl > MAX_BUF + 32) {
+                LOG("[HTTP1.1] response too large\n");
+                return -1;
+            }
+            uint8_t enc[MAX_BUF + 32];
+            if (recv_all(c->fd, enc, rrl)) {
+                LOG("[HTTP1.1] recv response body failed\n");
+                return -1;
+            }
+            uint8_t plain[MAX_BUF];
+            uint8_t inner_ct = 0;
+            int ptlen = tls_decrypt_app(c, enc, rrl, plain, rh[0], rh[1], rh[2], &inner_ct);
+            if (ptlen < 0) {
+                LOG("[HTTP1.1] decrypt failed\n");
+                return -1;
+            }
+            if (c->tls_version == 13 && inner_ct == TLS_CONTENT_HANDSHAKE) {
+                LOG("[HTTP1.1] skipping TLS 1.3 handshake message\n");
+                continue;
+            }
+            int copy_len = ptlen;
+            if (total_read + copy_len > rmax) copy_len = rmax - total_read;
+            if (copy_len > 0) {
+                memcpy(rbuf + total_read, plain, copy_len);
+                total_read += copy_len;
+            }
+            if (total_read >= rmax) break;
+        }
+        if (total_read == 0) {
+            LOG("[HTTP1.1] no response data received\n");
             return -1;
         }
-        uint16_t rrl = READ16(rh + 3);
-        uint8_t enc[MAX_BUF + 32]; 
-        if (recv_all(c->fd, enc, rrl)) {
-            LOG("[HTTP1.1] recv response body failed\n");
-            return -1;
-        }
-        uint8_t inner_ct = 0;
-        int ptlen = tls_decrypt_app(c, enc, rrl, rbuf, rh[0], rh[1], rh[2], &inner_ct);
-        if (ptlen < 0) {
-            LOG("[HTTP1.1] decrypt failed\n");
-            return -1;
-        }
-        return ptlen;
+        LOG("[HTTP1.1] request complete, body: %d bytes\n", total_read);
+        return total_read;
     }
 }
-
 void planck_close(planck_conn *c) { 
     if (c) { close(c->fd); free(c); } 
 }
