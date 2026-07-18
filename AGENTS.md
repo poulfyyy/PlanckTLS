@@ -57,3 +57,4 @@ There is no `make`, `check`, or test runner. To verify a change:
 - Not a git repo in this checkout; don't assume `git` operations work without checking.
 - Source is single-file C (`planck.c` ~1.8k lines). No packages, no submodules, no generated code, no migrations.
 - API surface is four functions: `planck_init`, `planck_connect`, `planck_request`, `planck_close`. Keep that contract stable across variants.
+this is 50% ai slop and 50% human trust
